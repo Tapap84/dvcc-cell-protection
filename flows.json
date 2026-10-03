@@ -1,0 +1,271 @@
+[
+    {
+        "id": "c7f8e6a1b2d34002",
+        "type": "victron-input-custom",
+        "z": "c7f8e6a1b2d34001",
+        "service": "com.victronenergy.battery/1",
+        "path": "/System/MaxCellVoltage",
+        "serviceObj": {
+            "service": "com.victronenergy.battery/1",
+            "name": "SerialBattery(JKBMS) (1)"
+        },
+        "pathObj": {
+            "path": "/System/MaxCellVoltage",
+            "name": "/System/MaxCellVoltage",
+            "type": "number",
+            "value": 3.331
+        },
+        "name": "Max Cell Voltage",
+        "onlyChanges": false,
+        "roundValues": "no",
+        "rateLimit": "0.2",
+        "outputs": 1,
+        "conditionalMode": false,
+        "outputTrue": "true",
+        "outputFalse": "false",
+        "debounce": "2000",
+        "x": 200,
+        "y": 200,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "c7f8e6a1b2d34003",
+        "type": "function",
+        "z": "c7f8e6a1b2d34001",
+        "name": "Individual Cell Protection",
+        "func": "// Individual Cell Voltage Protection\n//\n// ACTIVATION:\n//   Activates at >= 3.350 V.\n//\n// HYSTERESIS:\n//   Once active, remains active until <= 3.340 V.\n//   Between 3.340 V and 3.350 V, holds charge current at 15 A.\n//\n// RATE LIMIT:\n//   Output changes no more than once every 5 seconds.\n//\n// Change your specific voltages and desired amp throttle here.\n//\nconst points = [\n    { v: 3.350, a: 15 },\n    { v: 3.375, a: 10 },\n    { v: 3.400, a: 5 },\n    { v: 3.425, a: 2 },\n    { v: 3.450, a: 1 },\n    { v: 3.500, a: 0 }\n];\n\nconst ACTIVATE_VOLTAGE = 3.350;\nconst RELEASE_VOLTAGE = 3.340;\n\nconst voltage = Number(msg.payload);\nconst now = Date.now();\n\nconst lastSend = flow.get('cellProtectionLastSend') || 0;\nlet active = flow.get('cellProtectionActive') === true;\n\nif (isNaN(voltage)) {\n    node.status({\n        fill: \"red\",\n        shape: \"ring\",\n        text: \"Invalid cell voltage\"\n    });\n    return null;\n}\n\n// ============================================================\n// INACTIVE — WAIT FOR 3.350 V\n// ============================================================\n\nif (!active) {\n\n    if (voltage < ACTIVATE_VOLTAGE) {\n        node.status({\n            fill: \"grey\",\n            shape: \"ring\",\n            text: voltage.toFixed(3) + \" V — protection inactive\"\n        });\n        return null;\n    }\n\n    active = true;\n    flow.set('cellProtectionActive', true);\n}\n\n// ============================================================\n// ACTIVE — RELEASE AT 3.340 V\n// ============================================================\n\nif (active && voltage <= RELEASE_VOLTAGE) {\n\n    flow.set('cellProtectionActive', false);\n    flow.set('cellProtectionLastSend', now);\n\n    node.status({\n        fill: \"grey\",\n        shape: \"ring\",\n        text: voltage.toFixed(3) + \" V — protection released\"\n    });\n\n    return null;\n}\n\n// ============================================================\n// HYSTERESIS BAND: 3.340–3.350 V\n// ============================================================\n\nif (voltage < ACTIVATE_VOLTAGE) {\n\n    if (now - lastSend < 5000) {\n        node.status({\n            fill: \"blue\",\n            shape: \"ring\",\n            text: voltage.toFixed(3) + \" V → 15 A (waiting 5s)\"\n        });\n        return null;\n    }\n\n    flow.set('cellProtectionLastSend', now);\n\n    msg.payload = 15;\n\n    node.status({\n        fill: \"yellow\",\n        shape: \"dot\",\n        text: voltage.toFixed(3) + \" V → 15 A\"\n    });\n\n    return msg;\n}\n\n// ============================================================\n// RATE LIMIT\n// ============================================================\n\nif (now - lastSend < 5000) {\n    node.status({\n        fill: \"blue\",\n        shape: \"ring\",\n        text: voltage.toFixed(3) + \" V (waiting 5s)\"\n    });\n    return null;\n}\n\n// ============================================================\n// CELL VOLTAGE CURVE\n// ============================================================\n\nlet current;\n\nif (voltage >= points[points.length - 1].v) {\n\n    current = 0;\n\n} else {\n\n    let i = 0;\n\n    while (\n        i < points.length - 1 &&\n        voltage > points[i + 1].v\n    ) {\n        i++;\n    }\n\n    const p0 = points[Math.max(i - 1, 0)];\n    const p1 = points[i];\n    const p2 = points[i + 1];\n    const p3 = points[Math.min(i + 2, points.length - 1)];\n\n    const t = (voltage - p1.v) / (p2.v - p1.v);\n\n    const m1 = 0.5 * (p2.a - p0.a);\n    const m2 = 0.5 * (p3.a - p1.a);\n\n    const t2 = t * t;\n    const t3 = t2 * t;\n\n    const a = 2 * t3 - 3 * t2 + 1;\n    const b = t3 - 2 * t2 + t;\n    const c = t3 - t2;\n    const d = -2 * t3 + 3 * t2;\n\n    current =\n        a * p1.a +\n        b * m1 +\n        c * m2 +\n        d * p2.a;\n\n    current = Math.max(0, Math.min(15, current));\n    current = Math.round(current * 10) / 10;\n}\n\n// ============================================================\n// OUTPUT\n// ============================================================\n\nflow.set('cellProtectionLastSend', now);\n\nmsg.payload = current;\n\nnode.status({\n    fill: \"green\",\n    shape: \"dot\",\n    text: voltage.toFixed(3) + \" V → \" + current + \" A\"\n});\n\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 500,
+        "y": 200,
+        "wires": [
+            [
+                "c7f8e6a1b2d34005"
+            ]
+        ]
+    },
+    {
+        "id": "c7f8e6a1b2d34004",
+        "type": "victron-output-settings",
+        "z": "c7f8e6a1b2d34001",
+        "service": "com.victronenergy.settings",
+        "path": "/Settings/SystemSetup/MaxChargeCurrent",
+        "serviceObj": {
+            "service": "com.victronenergy.settings",
+            "name": "Venus settings"
+        },
+        "pathObj": {
+            "path": "/Settings/SystemSetup/MaxChargeCurrent",
+            "type": "float",
+            "name": "DVCC Charge current limit (A)",
+            "mode": "both"
+        },
+        "name": "Cell Protection → DVCC",
+        "onlyChanges": false,
+        "outputs": 0,
+        "x": 810,
+        "y": 200,
+        "wires": []
+    },
+    {
+        "id": "c7f8e6a1b2d34005",
+        "type": "debug",
+        "z": "c7f8e6a1b2d34001",
+        "name": "Cell Protection Output",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 800,
+        "y": 260,
+        "wires": []
+    },
+    {
+        "id": "08197863d1cb4122",
+        "type": "inject",
+        "z": "c7f8e6a1b2d34001",
+        "name": "",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "3.50",
+        "payloadType": "num",
+        "x": 170,
+        "y": 300,
+        "wires": [
+            [
+                "c7f8e6a1b2d34003"
+            ]
+        ]
+    },
+    {
+        "id": "66fd084baf7d0dd5",
+        "type": "inject",
+        "z": "c7f8e6a1b2d34001",
+        "name": "",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "3.45",
+        "payloadType": "num",
+        "x": 170,
+        "y": 340,
+        "wires": [
+            [
+                "c7f8e6a1b2d34003"
+            ]
+        ]
+    },
+    {
+        "id": "30f83a80d3edce6e",
+        "type": "inject",
+        "z": "c7f8e6a1b2d34001",
+        "name": "",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "3.4",
+        "payloadType": "num",
+        "x": 170,
+        "y": 380,
+        "wires": [
+            [
+                "c7f8e6a1b2d34003"
+            ]
+        ]
+    },
+    {
+        "id": "c036db4c2ed3c5da",
+        "type": "inject",
+        "z": "c7f8e6a1b2d34001",
+        "name": "",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "3.36",
+        "payloadType": "num",
+        "x": 170,
+        "y": 420,
+        "wires": [
+            [
+                "c7f8e6a1b2d34003"
+            ]
+        ]
+    },
+    {
+        "id": "5e974e4f8558fe9e",
+        "type": "inject",
+        "z": "c7f8e6a1b2d34001",
+        "name": "",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "3.35",
+        "payloadType": "num",
+        "x": 170,
+        "y": 460,
+        "wires": [
+            [
+                "c7f8e6a1b2d34003"
+            ]
+        ]
+    },
+    {
+        "id": "533abac353a3cd1b",
+        "type": "inject",
+        "z": "c7f8e6a1b2d34001",
+        "name": "",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "3.30",
+        "payloadType": "num",
+        "x": 170,
+        "y": 500,
+        "wires": [
+            [
+                "c7f8e6a1b2d34003"
+            ]
+        ]
+    },
+    {
+        "id": "812ae1c56124738a",
+        "type": "comment",
+        "z": "c7f8e6a1b2d34001",
+        "name": "read me",
+        "info": "these values are for you to test the cell values and see how this flow works.\n\nremove them and connect the JKBMS input.\n\nyou may need to make your own node here. it's a custom input, select the jkbms, select /system/MaxCellVoltage",
+        "x": 400,
+        "y": 320,
+        "wires": []
+    },
+    {
+        "id": "5c3d3ca2c4169c6a",
+        "type": "comment",
+        "z": "c7f8e6a1b2d34001",
+        "name": "connect me",
+        "info": "",
+        "x": 670,
+        "y": 160,
+        "wires": []
+    },
+    {
+        "id": "c7a33780322fea8f",
+        "type": "global-config",
+        "env": [],
+        "modules": {
+            "@victronenergy/node-red-contrib-victron": "1.6.64"
+        }
+    }
+]
